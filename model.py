@@ -193,14 +193,10 @@ class ActorCNN(torch.nn.Module):
         print_summary(self)
 
     def forward(self,  x1d: torch.tensor, x: torch.Tensor, t: torch.Tensor, /) -> torch.Tensor:
-        print(torch.sum(x))
-        print(x.size())
         for conv in self.convs:
             x = torch.relu(conv(x))
             x = self.pool(x)
-        print("HERE")
         x = x.view(x.size(0), -1)
-        print(x)
         x = torch.concat([x, x1d, Variable(self.pe[t[:, 0]% self.max_len], requires_grad=False)], 1)
         for linear in self.linears[:-1]:
             x = torch.relu(linear(x))
@@ -262,8 +258,8 @@ class TwinCriticCNN(torch.nn.Module):
         pe = torch.zeros(max_len, n)
         position = torch.arange(0, max_len).unsqueeze(1)
         div_term = torch.arange(2, n + 1, 2) * np.pi / max_len
-        pe[:, 0::2] = torch.sin(position * div_term) / (size * size2)
-        pe[:, 1::2] = torch.cos(position * div_term) / (size * size2)
+        pe[:, 0::2] = torch.sin(position * div_term) / size3
+        pe[:, 1::2] = torch.cos(position * div_term) / size3
         self.register_buffer('pe', pe)
 
     def initialize(self, rng: torch.Generator) -> None:
@@ -306,7 +302,7 @@ class TwinCriticCNN(torch.nn.Module):
             else:
                 q1 = torch.relu(conv(q1))
             q1 = self.pool(q1)
-        q1 = q1.view(x.size(0), -1)
+        q1 = q1.view(q1.size(0), -1)
         q1 = torch.concat([q1, x1d, a, Variable(self.pe[t[:, 0] % self.max_len], requires_grad=False)], 1)
         for linear in self.linears[:-1]:
             q1 = torch.relu(linear(q1))
@@ -318,7 +314,7 @@ class TwinCriticCNN(torch.nn.Module):
             else:
                 q2 = torch.relu(conv(q2))
             q2 = self.pool(q2)
-        q2 = q2.view(x.size(0), -1)
+        q2 = q2.view(q2.size(0), -1)
         q2 = torch.concat([q2, x1d, a, Variable(self.pe[t[:, 0] % self.max_len], requires_grad=False)], 1)
         for linear in self.linears2[:-1]:
             q2 = torch.relu(linear(q2))
@@ -459,8 +455,8 @@ class ProbActorCNN(torch.nn.Module):
         pe = torch.zeros(max_len, n)
         position = torch.arange(0, max_len).unsqueeze(1)
         div_term = torch.arange(2, n + 1, 2) * np.pi / max_len
-        pe[:, 0::2] = torch.sin(position * div_term) / (size * size2)
-        pe[:, 1::2] = torch.cos(position * div_term) / (size * size2)
+        pe[:, 0::2] = torch.sin(position * div_term) / size3
+        pe[:, 1::2] = torch.cos(position * div_term) / size3
         self.register_buffer('pe', pe)
 
     def initialize(self, rng: torch.Generator) -> None:

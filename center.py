@@ -11,7 +11,7 @@ MINP = 1/2
 class Platform:
     def __init__(self, travel_distance, travel_time, num_zone, max_waiting = 5, max_step = 6, option = 'TD3_MLP', permutation = None, permutation2 = None,
         kernel_size = 3, stride = 1, pooling = 2, device = 'cpu', actor_lr=0.0001, critic_lr=0.001, update_freq = 1, writer = None, od_permutation = True,
-        veh_num = 1, demand_mean = None, demand_std = None, searching = 'Greedy'):
+        veh_num = 1, demand_mean = None, demand_std = None, searching = 'Greedy', policy_delay = 30):
         self.num_zone = num_zone
         self.veh_num = veh_num
         if demand_mean is not None:
@@ -51,15 +51,15 @@ class Platform:
                 self.pricer = TD3_CNN_deep(num_zone, max(max_waiting//update_freq, 1), max_step + 1, 2*max_waiting, \
                                            kernel_size, stride, max(permutation[0])+1, \
                                        max(permutation[1])+1, pooling = pooling, actor_lr = actor_lr, critic_lr = critic_lr,
-                                       writer = writer)
+                                       writer = writer, policy_delay = policy_delay)
             else:
                 self.pricer = TD3_CNN_deep(num_zone, max(max_waiting//update_freq, 1), max_step + 1, max_waiting, \
                                            kernel_size, stride, num_zone, num_zone, \
                                        pooling = pooling, actor_lr = actor_lr, critic_lr = critic_lr,
-                                       writer = writer)
+                                       writer = writer, policy_delay = policy_delay)
         else:
             self.pricer = TD3_MLP(num_zone, max_waiting, max(max_waiting//update_freq, 1), max_step + 1, actor_lr = actor_lr, critic_lr = critic_lr,
-                                   writer = writer)
+                                   writer = writer, policy_delay = policy_delay)
         print(option)
         if option.startswith('TD3'):
             self.buffer = Memory(size = (10*10800)//update_freq, device=device)
@@ -95,12 +95,10 @@ class Platform:
     def update_price(self, pass_count, veh_count, ongoing_veh_count, price_multipliers, t, mode, od_permutation = True,
                      policy_constr = False, last_pricing = None): # price for trips departure from certain place
         # normalize here
-        pass_count = (pass_count - self.demand_mean[None, :, :]) / (self.demand_std + 1)[None, :, :]
-        veh_count = veh_count / self.veh_num
-        ongoing_veh_count = ongoing_veh_count / self.veh_num
-        price_multipliers = price_multipliers / MAXP
+        pass_count, veh_count, ongoing_veh_count,  price_multipliers = \
+            self.preprocess(pass_count, veh_count, ongoing_veh_count,  price_multipliers)
         if len(price_multipliers.shape) < 2:
-            price_multipliers = price_multipliers[None,:]
+            price_multipliers = price_multipliers[None, :]
 
         # print(np.mean(pass_count))
         # print(np.mean(veh_count))
@@ -169,22 +167,29 @@ class Platform:
             # print(self.prices)
             return (MAXP**(self.prices.squeeze(0).numpy().flatten().clip(min=-1, max=1)))
 
-    def add_memory(self, pass_count, veh_count, ongoing_veh_count,  price_multipliers, reward, t, od_permutation = True):
-        # normalize here
-        pass_count = (pass_count - self.demand_mean[None,:,:]) / (self.demand_std + 1)[None,:,:]
+    def preprocess(self, pass_count, veh_count, ongoing_veh_count, price_multipliers):
+        pass_count = (pass_count - self.demand_mean[None, :, :]) / (self.demand_std + 1)[None, :, :]
         veh_count = veh_count / self.veh_num * self.num_zone
         ongoing_veh_count = ongoing_veh_count / self.veh_num * self.num_zone
         price_multipliers = price_multipliers / MAXP
+        return pass_count, veh_count, ongoing_veh_count, price_multipliers
+
+    def add_memory(self, pass_count, veh_count, ongoing_veh_count,  price_multipliers, reward, t, od_permutation = True):
+        # normalize here
+        pass_count, veh_count, ongoing_veh_count,  price_multipliers = \
+            self.preprocess(pass_count, veh_count, ongoing_veh_count,  price_multipliers)
         if len(price_multipliers.shape) < 2:
             price_multipliers = price_multipliers[None, :]
 
         if self.option.endswith('CNN'):
             state2d = torch.from_numpy(pass_count).type(torch.FloatTensor)
-            state = torch.from_numpy(np.concatenate([veh_count, ongoing_veh_count.flatten(), price_multipliers.flatten()])).type(torch.FloatTensor)
+            state = torch.from_numpy(
+                np.concatenate([veh_count, ongoing_veh_count.flatten(), price_multipliers.flatten()])).type(
+                torch.FloatTensor)
             if od_permutation:
-                tmp = torch.zeros((state2d.size(0)*2, max(self.permutation[0])+1, max(self.permutation[1])+1))
-                tmp[:state2d.size(0), self.permutation[0] , self.permutation[1]] += state2d.view(state2d.size(0),-1)
-                tmp[state2d.size(0):, self.permutation2[0] , self.permutation2[1]] += state2d.view(state2d.size(0),-1)
+                tmp = torch.zeros((state2d.size(0) * 2, max(self.permutation[0]) + 1, max(self.permutation[1]) + 1))
+                tmp[:state2d.size(0), self.permutation[0], self.permutation[1]] += state2d.view(state2d.size(0), -1)
+                tmp[state2d.size(0):, self.permutation2[0], self.permutation2[1]] += state2d.view(state2d.size(0), -1)
                 state2d = tmp
         else:
             state = torch.from_numpy(np.concatenate([pass_count.flatten(), veh_count, ongoing_veh_count.flatten(),
@@ -218,7 +223,7 @@ class Platform:
         self.prices = torch.from_numpy(tmp[None,:]).type(torch.FloatTensor)
         if policy_constr:
             res = (self.prices.squeeze(0).numpy()- \
-                   last_pricing).clip(min=-0.033*self.update_freq, max=0.033*self.update_freq)+last_pricing
+                   last_pricing).clip(min=-(MINP * 0.1 * self.update_freq), max=(MINP * 0.1 * self.update_freq))+last_pricing
             return res
         else:
             return self.prices.squeeze(0).numpy()

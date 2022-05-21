@@ -56,6 +56,9 @@ def get_arguments(argv):
     parser.add_argument('-rs', '--seed', type=int, default=47, help='random seed')
     parser.add_argument('-pc', '--policy_constr', action='store_true', default=False,
                         help='constrained pricing change speed')
+    parser.add_argument('-pd', '--policy_delay', type = int, default = 30,
+                        help='incremental policy delay')
+
 
     args = parser.parse_args(argv)
 
@@ -76,7 +79,7 @@ if __name__ == '__main__':
     constraint_tag = '' if args.policy_constr else '_no_constr'
 
     scenario_tag = args.data_folder.replace("/", "_")
-    settings_tag = args.pricing_alg + permutation_tag + constraint_tag + "_" +args.searching + "_" + args.name
+    settings_tag = args.pricing_alg + permutation_tag + constraint_tag + "_" +args.searching + "_" + str(args.policy_delay) + "_" + args.name
     hyperp_tag = str(args.batch_size) + "_" + str(args.actor_lr) + "_" + str(args.critic_lr)
 
     # prepare the folders for storing the results
@@ -146,12 +149,12 @@ if __name__ == '__main__':
                               stride=args.stride, pooling = args.pooling, device=args.device, writer=writer,
                               od_permutation=args.od_permutation, update_freq = args.frequency, veh_num = len(vp),\
                               demand_mean = np.mean(dd_train, axis = 0), demand_std = np.std(dd_train, axis = 0),
-                              searching = args.searching)
+                              searching = args.searching, policy_delay = args.policy_delay)
     else:
         controller = Platform(td, tt, args.num_zone, actor_lr=args.actor_lr, critic_lr=args.critic_lr, device=args.device,
                               writer=writer, update_freq = args.frequency, veh_num= len(vp),
                               demand_mean = np.mean(dd_train, axis = 0), demand_std = np.std(dd_train, axis = 0),
-                              searching = args.searching)
+                              searching = args.searching, policy_delay = args.policy_delay)
 
     env = Environment(td, tt, vp, args.num_zone, frequency=args.frequency)
 

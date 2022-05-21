@@ -88,6 +88,15 @@ class Pricer:
         )
 
 class TD3(Pricer):
+    def next_udpate_step(self, update_time):
+        if self.policy_delay  == 0: # return n
+            return round(update_time / np.log(update_time + 1))
+        elif self.policy_delay == -1: # return n/ln(n)
+            return update_time
+        else: # constant gap
+            return self.policy_delay
+
+
     def update_policy(self, batch_size, memory, iter):
         # Sample batch
         state_batch, state2d_batch, action_batch, reward_batch, next_state_batch, next_state2d_batch, t_batch = memory.sample(batch_size)
@@ -112,7 +121,7 @@ class TD3(Pricer):
         self.critic_optim.step()
         self.soft_update(self.critic, self.critic_target)
         # Delay policy updates
-        if iter % self.policy_freq == 0:
+        if iter == self.policy_freq:
             # print(current_Q1)
             # print(target_q_batch)
             # Actor update
@@ -129,17 +138,17 @@ class TD3(Pricer):
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.1)
             self.actor_optim.step()
             self.update_time += 1
-            self.policy_freq += round(self.update_time/np.log(self.update_time+1))
+            self.policy_freq += self.next_udpate_step(self.update_time)
 
             # target update, use interpolation
-            self.soft_update(self.actor, self.actor_target, tau = 1e-3 * max(round(5* (1 - np.log(5) + np.log(self.update_time))),1))
+            self.soft_update(self.actor, self.actor_target, tau = 1e-3 * min(self.next_udpate_step(self.update_time), 1000))
 
     def select_action(self, state, state2d,  t):
         action = self.actor(state, state2d, t)
         return action.detach()
 
 class TD3_MLP(TD3):
-    def __init__(self, num_zone, max_waiting, max_duration, max_traveling, actor_lr = 0.0001, critic_lr = 0.001, writer = None):
+    def __init__(self, num_zone, max_waiting, max_duration, max_traveling, actor_lr = 0.0001, critic_lr = 0.001, writer = None, policy_delay = 30):
         self.n_action = num_zone
         self.actor = ActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 64, 32, num_zone])
         self.actor_target = ActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 64, 32, num_zone])
@@ -159,18 +168,19 @@ class TD3_MLP(TD3):
         self.policy_freq = 3
         self.max_action = 1
         self.update_time = 0
+        self.policy_delay = policy_delay
 
 
 
 class TD3_CNN_deep(TD3):
     def __init__(self, num_zone, max_duration, max_traveling, total_channel, kernel_size, stride, row_size, col_size, pooling, actor_lr = 0.0001,
-                 critic_lr = 0.001, writer = None):
+                 critic_lr = 0.001, writer = None, policy_delay = 30):
         self.n_action = num_zone
         self.writer = writer
         self.actor = ActorCNN(row_size,\
             col_size, \
             num_zone * (max_traveling + max_duration), \
-            channels = [total_channel, 32], \
+            channels = [total_channel,  32], \
             kernel_size_conv=kernel_size,\
             stride_size_conv=stride,\
             kernel_size_pool=pooling,\
@@ -179,7 +189,7 @@ class TD3_CNN_deep(TD3):
         self.actor_target = ActorCNN(row_size,\
             col_size, \
             num_zone * (max_traveling + max_duration), \
-            channels = [total_channel, 32], \
+            channels = [total_channel,  32], \
             kernel_size_conv=kernel_size,\
             stride_size_conv=stride,\
             kernel_size_pool=pooling,\
@@ -190,7 +200,7 @@ class TD3_CNN_deep(TD3):
         self.critic = TwinCriticCNN(row_size,\
             col_size, \
             num_zone * (max_traveling + max_duration + 1), \
-            channels = [total_channel, 32], \
+            channels = [total_channel,  32], \
             kernel_size_conv=kernel_size,\
             stride_size_conv=stride,\
             kernel_size_pool=pooling,\
@@ -215,6 +225,7 @@ class TD3_CNN_deep(TD3):
         self.policy_freq = 1
         self.max_action = 1
         self.update_time = 0
+        self.policy_delay = policy_delay
 
 class PPO(Pricer):
     def set_action_std(self, new_action_std):
@@ -227,7 +238,7 @@ class PPO(Pricer):
         with torch.no_grad():
             for state_batch, state2d_batch, action_batch, reward_batch, t_batch in memory.iteration(
                     horizon_size):
-                log_prob , _ = self.evaluate_actions(state_batch, action_batch, t_batch)
+                log_prob , _ = self.evaluate_actions(state_batch, state2d_batch, action_batch, t_batch)
                 old_value = torch.sum(reward_batch.view(-1) * torch.tensor([(GAMMA ** i) for i in range(horizon_size)]).to(reward_batch.device))
                 old_log_probs.append(log_prob.detach())
                 old_values.append(old_value.detach())
@@ -242,7 +253,7 @@ class PPO(Pricer):
                 # calculate Advantage, and odd of probability
                 values = self.critic(state_batch, state2d_batch, t_batch)
                 advantages = old_values_batch - values.detach()
-                new_log_probs, new_dist_entropy = self.evaluate_actions(state_batch, action_batch, state2d_batch, t_batch)
+                new_log_probs, new_dist_entropy = self.evaluate_actions(state_batch, state2d_batch, action_batch, t_batch)
                 ratio = torch.exp(new_log_probs - old_log_probs_batch.detach())
                 # clipped surrogate loss
                 policy_loss_1 = advantages * ratio
@@ -283,6 +294,18 @@ class PPO(Pricer):
 
         # clear the memory
         memory.clear()
+
+    def eval(self):
+        self.actor.eval()
+        self.critic.eval()
+
+    def cuda(self):
+        self.actor.cuda()
+        self.critic.cuda()
+
+    def initialize(self, rng):
+        self.actor.initialize(rng)
+        self.critic.initialize(rng)
 
 class PPO_MLP(PPO):
     def __init__(self, num_zone, max_waiting, max_duration, max_traveling, actor_lr = 0.0001, critic_lr = 0.001, writer = None):
