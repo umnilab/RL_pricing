@@ -58,41 +58,67 @@ class Pricer:
         action = torch.rand((1,self.n_action))
         return action
 
-    def load_weights(self, output):
+    def load_weights(self, output, epoch):
         if output is None: return
 
         self.actor.load_state_dict(
-            torch.load('{}actor_mlp.pkl'.format(output))
+            torch.load('{}actor_{}.pkl'.format(output, epoch))
         )
 
         self.critic.load_state_dict(
-            torch.load('{}critic_mlp.pkl'.format(output))
+            torch.load('{}critic_{}.pkl'.format(output, epoch))
         )
 
-    def save_model(self,output):
+        self.actor_target.load_state_dict(
+            torch.load('{}actor_target_{}.pkl'.format(output, epoch))
+        )
+
+        self.critic_target.load_state_dict(
+            torch.load('{}critic_target_{}.pkl'.format(output, epoch))
+        )
+
+        self.actor_optim.load_state_dict(
+            torch.load('{}actor_optim_{}.pkl'.format(output, epoch))
+        )
+
+        self.critic_optim.load_state_dict(
+            torch.load('{}critic_optim_{}.pkl'.format(output, epoch))
+        )
+
+
+    def save_model(self, output, epoch):
         torch.save(
             self.actor.state_dict(),
-            '{}actor.pkl'.format(output)
+            '{}actor_{}.pkl'.format(output, epoch)
         )
         torch.save(
             self.critic.state_dict(),
-            '{}critic.pkl'.format(output)
+            '{}critic_{}.pkl'.format(output, epoch)
+        )
+        torch.save(
+            self.actor_target.state_dict(),
+            '{}actor_target_{}.pkl'.format(output, epoch)
+        )
+        torch.save(
+            self.critic_target.state_dict(),
+            '{}critic_target_{}.pkl'.format(output, epoch)
         )
         torch.save(
             self.actor_optim.state_dict(),
-            '{}actor_optim.pkl'.format(output)
+            '{}actor_optim_{}.pkl'.format(output, epoch)
         )
         torch.save(
             self.critic_optim.state_dict(),
-            '{}critic_optim.pkl'.format(output)
+            '{}critic_optim_{}.pkl'.format(output, epoch)
         )
 
 class TD3(Pricer):
     def next_udpate_step(self, update_time):
-        if self.policy_delay  == 0: # return n
-            return round(update_time / np.log(update_time + 1))
-        elif self.policy_delay == -1: # return n/ln(n)
-            return update_time
+        if self.policy_delay  == 0: # return n/ln(n+1), given the update frequency = 10 and buffer_size = 100800 (small case),
+            # for 10000 updates of the value networks, nearly all buffers (10*10000 steps) are the wanted data
+            return min(10000, round(update_time / np.log(update_time + 1)))
+        elif self.policy_delay == -1: # return n
+            return min(10000, update_time)
         else: # constant gap
             return self.policy_delay
 
@@ -119,9 +145,10 @@ class TD3(Pricer):
         value_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1)
         self.critic_optim.step()
+        # Q target update
         self.soft_update(self.critic, self.critic_target)
         # Delay policy updates
-        if iter == self.policy_freq:
+        if iter >= self.policy_freq:
             # print(current_Q1)
             # print(target_q_batch)
             # Actor update
@@ -138,24 +165,36 @@ class TD3(Pricer):
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.1)
             self.actor_optim.step()
             self.update_time += 1
-            self.policy_freq += self.next_udpate_step(self.update_time)
-
-            # target update, use interpolation
-            self.soft_update(self.actor, self.actor_target, tau = 1e-3 * min(self.next_udpate_step(self.update_time), 1000))
+            self.policy_freq = iter + self.next_udpate_step(self.update_time)
+            # policy target update, directly copy, meanwhile forget the top layer of the Q-network
+            self.soft_update(self.actor, self.actor_target, tau = 1e-3)
+            # print(self.update_time)
+            if self.forget and self.update_time % 100 == 0:
+                print('Forget!')
+                # A few iteration for fine tuning the Q function
+                self.critic.forget()
+                self.soft_update(self.critic, self.critic_target, tau = 1)
+                # self.soft_update(self.actor, self.actor_target, tau=1)
+                # reinitialize the optimizer
+                self.critic_optim = Adam(self.critic.parameters(), lr=self.critic_lr)
+                # self.policy_freq += 1000
+                memory.forget()
+                # self.update_time = 0
 
     def select_action(self, state, state2d,  t):
         action = self.actor(state, state2d, t)
         return action.detach()
 
 class TD3_MLP(TD3):
-    def __init__(self, num_zone, max_waiting, max_duration, max_traveling, actor_lr = 0.0001, critic_lr = 0.001, writer = None, policy_delay = 30):
+    def __init__(self, num_zone, max_waiting, max_duration, max_traveling, actor_lr = 0.0001, critic_lr = 0.001, writer = None, policy_delay = 30,
+                 position_encode = 32, forget = False):
         self.n_action = num_zone
-        self.actor = ActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 64, 32, num_zone])
-        self.actor_target = ActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 64, 32, num_zone])
+        self.actor = ActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 128, num_zone], n = position_encode)
+        self.actor_target = ActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 128, num_zone], n = position_encode)
         self.actor_optim = Adam(self.actor.parameters(), lr=actor_lr)
 
-        self.critic = TwinCriticMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 64, 32, 1])
-        self.critic_target = TwinCriticMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 64, 32, 1])
+        self.critic = TwinCriticMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 128, 1], n = position_encode)
+        self.critic_target = TwinCriticMLP(num_zone, max_waiting, max_duration, max_traveling, [128,  128, 1], n = position_encode)
         self.critic_optim = Adam(self.critic.parameters(), lr=critic_lr)
 
         self.writer = writer
@@ -169,52 +208,60 @@ class TD3_MLP(TD3):
         self.max_action = 1
         self.update_time = 0
         self.policy_delay = policy_delay
+        self.critic_lr = critic_lr
+        self.actor_lr = actor_lr
+
+        self.forget = forget
 
 
 
 class TD3_CNN_deep(TD3):
     def __init__(self, num_zone, max_duration, max_traveling, total_channel, kernel_size, stride, row_size, col_size, pooling, actor_lr = 0.0001,
-                 critic_lr = 0.001, writer = None, policy_delay = 30):
+                 critic_lr = 0.001, writer = None, policy_delay = 30, position_encode = 32, forget = False):
         self.n_action = num_zone
         self.writer = writer
         self.actor = ActorCNN(row_size,\
             col_size, \
             num_zone * (max_traveling + max_duration), \
-            channels = [total_channel,  32], \
+            num_zone, \
+            channels = [total_channel, 128, 128], \
             kernel_size_conv=kernel_size,\
             stride_size_conv=stride,\
             kernel_size_pool=pooling,\
             stride_size_pool=pooling,\
-            shapes = [128, 64, 32, num_zone])
+            shapes = [128, 128, num_zone], n = position_encode)
         self.actor_target = ActorCNN(row_size,\
             col_size, \
             num_zone * (max_traveling + max_duration), \
-            channels = [total_channel,  32], \
+            num_zone, \
+            channels = [total_channel, 128, 128], \
             kernel_size_conv=kernel_size,\
             stride_size_conv=stride,\
             kernel_size_pool=pooling,\
             stride_size_pool=pooling,\
-            shapes = [128, 64, 32, num_zone])
+            shapes = [128, 128, num_zone], n = position_encode)
         self.actor_optim  = Adam(self.actor.parameters(), lr=actor_lr)
 
         self.critic = TwinCriticCNN(row_size,\
             col_size, \
             num_zone * (max_traveling + max_duration + 1), \
-            channels = [total_channel,  32], \
+            num_zone,\
+            channels = [total_channel, 128,  128], \
             kernel_size_conv=kernel_size,\
             stride_size_conv=stride,\
             kernel_size_pool=pooling,\
             stride_size_pool=pooling,\
-            shapes = [128, 64, 32, 1])
+            shapes = [128, 128, 1], n = position_encode)
         self.critic_target = TwinCriticCNN(row_size,\
             col_size, \
             num_zone * (max_traveling + max_duration + 1), \
-            channels = [total_channel, 32], \
+            num_zone,\
+            channels = [total_channel, 128, 128], \
             kernel_size_conv=kernel_size,\
             stride_size_conv=stride,\
             kernel_size_pool=pooling,\
             stride_size_pool=pooling,\
-            shapes = [128, 64, 32, 1])
+            shapes = [128, 128, 1], n = position_encode)
         self.critic_optim = Adam(self.critic.parameters(), lr=critic_lr)
 
         self.actor_target.eval()
@@ -226,6 +273,10 @@ class TD3_CNN_deep(TD3):
         self.max_action = 1
         self.update_time = 0
         self.policy_delay = policy_delay
+        self.critic_lr = critic_lr
+        self.actor_lr = actor_lr
+
+        self.forget = forget
 
 class PPO(Pricer):
     def set_action_std(self, new_action_std):
@@ -244,7 +295,7 @@ class PPO(Pricer):
                 old_values.append(old_value.detach())
         # Do a complete pass on the rollout buffer
         print("Updating policy")
-        continue_training = True
+        # continue_training = True
         for epoch in range(epoches):
             # print("Epoch" + str(epoch) + "/" + str(iter))
             total_loss = 0
@@ -268,14 +319,14 @@ class PPO(Pricer):
 
                 total_loss += loss.detach()
 
-                with torch.no_grad():
-                    log_ratio = new_log_probs - old_log_probs_batch
-                    approx_kl_div = torch.mean((torch.exp(log_ratio)-1) - log_ratio).cpu().numpy()
+                # with torch.no_grad():
+                #     log_ratio = new_log_probs - old_log_probs_batch
+                    # approx_kl_div = torch.mean((torch.exp(log_ratio)-1) - log_ratio).cpu().numpy()
 
-                # limit the KL divergence of the update
-                if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
-                    continue_training = False
-                    break
+                # limit the KL divergence of the update, disable it as it does not occur in the vanilla PPO
+                # if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
+                #     continue_training = False
+                #     break
 
                 self.actor.zero_grad()
                 self.critic.zero_grad()
@@ -288,8 +339,8 @@ class PPO(Pricer):
             self.writer.add_scalar("PPO_loss/policy_loss", policy_loss, self.update_time)
             self.writer.add_scalar("PPO_loss/value_loss", value_loss, self.update_time)
 
-            if not continue_training:
-                break
+            # if not continue_training:
+            #     break
             self.update_time += 1
 
         # clear the memory
@@ -307,15 +358,33 @@ class PPO(Pricer):
         self.actor.initialize(rng)
         self.critic.initialize(rng)
 
+    def save_model(self, output, epoch):
+        torch.save(
+            self.actor.state_dict(),
+            '{}actor_{}.pkl'.format(output, epoch)
+        )
+        torch.save(
+            self.critic.state_dict(),
+            '{}critic_{}.pkl'.format(output, epoch)
+        )
+        torch.save(
+            self.actor_optim.state_dict(),
+            '{}actor_optim_{}.pkl'.format(output, epoch)
+        )
+        torch.save(
+            self.critic_optim.state_dict(),
+            '{}critic_optim_{}.pkl'.format(output, epoch)
+        )
+
 class PPO_MLP(PPO):
-    def __init__(self, num_zone, max_waiting, max_duration, max_traveling, actor_lr = 0.0001, critic_lr = 0.001, writer = None):
+    def __init__(self, num_zone, max_waiting, max_duration, max_traveling, actor_lr = 0.0001, critic_lr = 0.001, writer = None, position_encode = 32):
         self.n_action = num_zone
-        self.actor = ProbActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 64, 32, num_zone])
-        # self.actor_target = ProbActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 32, 2*num_zone])
+        self.actor = ProbActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 128, num_zone], n = position_encode)
+        # self.actor_target = ProbActorMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 32, 2*num_zone], n = position_encode)
         self.actor_optim = Adam(self.actor.parameters(), lr=actor_lr)
 
-        self.critic = CriticMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 64, 32, 1])
-        # self.critic_target = CriticMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 32, 1])
+        self.critic = CriticMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 128, 1], n = position_encode)
+        # self.critic_target = CriticMLP(num_zone, max_waiting, max_duration, max_traveling, [128, 32, 1], n = position_encode)
         self.critic_optim = Adam(self.critic.parameters(), lr=critic_lr)
         self.writer = writer
         # self.actor_target.eval()
@@ -344,18 +413,19 @@ class PPO_MLP(PPO):
 
 class PPO_CNN_deep(PPO):
     def __init__(self, num_zone, max_duration, max_traveling, total_channel, kernel_size, stride, row_size, col_size, pooling, actor_lr = 0.0001,
-                 critic_lr = 0.001, writer = None):
+                 critic_lr = 0.001, writer = None, position_encode = 32):
         self.n_action = num_zone
         self.writer = writer
         self.actor = ProbActorCNN(row_size,\
             col_size, \
             num_zone * (max_traveling + max_duration), \
-            channels = [total_channel, 128, 32], \
+            num_zone, \
+            channels = [total_channel, 128, 128], \
             kernel_size_conv=kernel_size,\
             stride_size_conv=stride,\
             kernel_size_pool=pooling,\
             stride_size_pool=pooling,\
-            shapes = [128, 32, num_zone])
+            shapes = [128, 128, num_zone], n = position_encode)
         # self.actor_target = ActorCNN(row_size,\
         #     col_size, \
         #     num_zone * (max_traveling + max_duration), \
@@ -364,18 +434,19 @@ class PPO_CNN_deep(PPO):
         #     stride_size_conv=stride,\
         #     kernel_size_pool=pooling,\
         #     stride_size_pool=pooling,\
-        #     shapes = [128, 32, 2*num_zone])
+        #     shapes = [128, 32, 2*num_zone], n = position_encode)
         self.actor_optim  = Adam(self.actor.parameters(), lr=actor_lr)
 
         self.critic = CriticCNN(row_size,\
             col_size, \
             num_zone * (max_traveling + max_duration), \
-            channels = [total_channel, 128, 32], \
+            num_zone, \
+            channels = [total_channel, 128, 128], \
             kernel_size_conv=kernel_size,\
             stride_size_conv=stride,\
             kernel_size_pool=pooling,\
             stride_size_pool=pooling,\
-            shapes = [128, 32, 1])
+            shapes = [128, 128, 1], n = position_encode)
         # self.critic_target = TwinCriticCNN(row_size,\
         #     col_size, \
         #     num_zone * (max_traveling + max_duration + 1), \
@@ -384,7 +455,7 @@ class PPO_CNN_deep(PPO):
         #     stride_size_conv=stride,\
         #     kernel_size_pool=pooling,\
         #     stride_size_pool=pooling,\
-        #     shapes = [128, 32, 1])
+        #     shapes = [128, 32, 1], n = position_encode)
         self.critic_optim = Adam(self.critic.parameters(), lr=critic_lr)
 
         # self.actor_target.eval()
@@ -397,7 +468,7 @@ class PPO_CNN_deep(PPO):
 
     def evaluate_actions(self, states, state2d, actions, ts):
         action_mean = self.actor(states, state2d, ts)
-        action_var = self.action_var.expand_as(action_mean)
+        action_var = self.action_var.expand_as(action_mean).to(action_mean.device)
         cov_mat = torch.diag_embed(action_var)
         dist = MultivariateNormal(action_mean, cov_mat)
 
@@ -407,7 +478,7 @@ class PPO_CNN_deep(PPO):
 
     def select_action(self, state, state2d, t):
         action_mean = self.actor(state, state2d, t)
-        cov_mat = torch.diag(self.action_var).unsqueeze(dim=0)
+        cov_mat = torch.diag(self.action_var).unsqueeze(dim=0).to(action_mean.device)
         dist = MultivariateNormal(action_mean, cov_mat)
         action = dist.sample()
         return action.detach()

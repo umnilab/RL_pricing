@@ -5,13 +5,14 @@ from random import sample
 from lapsolver import solve_dense
 from pricer import TD3_MLP, TD3_CNN_deep, PPO_MLP, PPO_CNN_deep
 
-MAXP = 2
-MINP = 1/2
+MAXP = 3
+MINP = 1/3
 
 class Platform:
     def __init__(self, travel_distance, travel_time, num_zone, max_waiting = 5, max_step = 6, option = 'TD3_MLP', permutation = None, permutation2 = None,
         kernel_size = 3, stride = 1, pooling = 2, device = 'cpu', actor_lr=0.0001, critic_lr=0.001, update_freq = 1, writer = None, od_permutation = True,
-        veh_num = 1, demand_mean = None, demand_std = None, searching = 'Greedy', policy_delay = 30):
+        veh_num = 1, demand_mean = None, demand_std = None, wage_mean = None, wage_std = None, searching = 'Gaussian', policy_delay = 30, position_encode = 32,
+                  auto_correlation = False, forget = False):
         self.num_zone = num_zone
         self.veh_num = veh_num
         if demand_mean is not None:
@@ -22,7 +23,17 @@ class Platform:
         if demand_std is not None:
             self.demand_std = demand_std
         else:
-            self.demand_std = np.zeros((num_zone,num_zone))
+            self.demand_std = np.ones((num_zone,num_zone))
+
+        if wage_mean is not None:
+            self.wage_mean = wage_mean
+        else:
+            self.wage_mean = 0
+
+        if wage_std is not None:
+            self.wage_std = wage_std
+        else:
+            self.wage_std = 1
 
 
         self.travel_distance = travel_distance
@@ -36,30 +47,30 @@ class Platform:
                 self.pricer = PPO_CNN_deep(num_zone, max(max_waiting//update_freq,1), max_step + 1, 2*max_waiting, \
                                            kernel_size, stride, max(permutation[0])+1, \
                                        max(permutation[1])+1, pooling = pooling, actor_lr = actor_lr, critic_lr = critic_lr,
-                                       writer = writer)
+                                       writer = writer, position_encode = position_encode)
             else:
                 self.pricer = PPO_CNN_deep(num_zone, max(max_waiting//update_freq,1), max_step + 1, max_waiting, \
                                            kernel_size, stride, num_zone, num_zone, \
                                        pooling = pooling, actor_lr = actor_lr, critic_lr = critic_lr,
-                                       writer = writer)
+                                       writer = writer, position_encode = position_encode)
         elif option == 'PPO_MLP':
             self.pricer = PPO_MLP(num_zone, max_waiting, max(max_waiting // update_freq, 1), max_step + 1,
                                   actor_lr=actor_lr, critic_lr=critic_lr,
-                                  writer=writer)
+                                  writer=writer, position_encode = position_encode)
         elif option == 'TD3_CNN':
             if od_permutation:
                 self.pricer = TD3_CNN_deep(num_zone, max(max_waiting//update_freq, 1), max_step + 1, 2*max_waiting, \
                                            kernel_size, stride, max(permutation[0])+1, \
                                        max(permutation[1])+1, pooling = pooling, actor_lr = actor_lr, critic_lr = critic_lr,
-                                       writer = writer, policy_delay = policy_delay)
+                                       writer = writer, policy_delay = policy_delay, position_encode = position_encode, forget = forget)
             else:
                 self.pricer = TD3_CNN_deep(num_zone, max(max_waiting//update_freq, 1), max_step + 1, max_waiting, \
                                            kernel_size, stride, num_zone, num_zone, \
                                        pooling = pooling, actor_lr = actor_lr, critic_lr = critic_lr,
-                                       writer = writer, policy_delay = policy_delay)
+                                       writer = writer, policy_delay = policy_delay, position_encode = position_encode, forget = forget)
         else:
             self.pricer = TD3_MLP(num_zone, max_waiting, max(max_waiting//update_freq, 1), max_step + 1, actor_lr = actor_lr, critic_lr = critic_lr,
-                                   writer = writer, policy_delay = policy_delay)
+                                   writer = writer, policy_delay = policy_delay, position_encode = position_encode, forget = forget)
         print(option)
         if option.startswith('TD3'):
             self.buffer = Memory(size = (10*10800)//update_freq, device=device)
@@ -71,10 +82,15 @@ class Platform:
         self.last_state = None
         self.last_state2d = None
 
+        self.auto_correlation = auto_correlation
+
         # For TD3
         self.epsilon = 0.5
         self.alpha = 0.9
         self.epsilon_min = 0.05
+
+        if self.auto_correlation:
+            self.noise = torch.zeros((10, self.num_zone))
 
         # For PPO
         self.action_std = 0.5
@@ -92,11 +108,12 @@ class Platform:
         self.device = device
         self.searching = searching
         
-    def update_price(self, pass_count, veh_count, ongoing_veh_count, price_multipliers, t, mode, od_permutation = True,
+    def update_price(self, pass_count, veh_count, ongoing_veh_count, avg_profit, zone_profits, price_multipliers,  \
+                     t, mode, od_permutation = True,\
                      policy_constr = False, last_pricing = None): # price for trips departure from certain place
         # normalize here
-        pass_count, veh_count, ongoing_veh_count,  price_multipliers = \
-            self.preprocess(pass_count, veh_count, ongoing_veh_count,  price_multipliers)
+        pass_count, veh_count, ongoing_veh_count,  price_multipliers, avg_profit, zone_profits= \
+            self.preprocess(pass_count, veh_count, ongoing_veh_count,  price_multipliers, avg_profit, zone_profits)
         if len(price_multipliers.shape) < 2:
             price_multipliers = price_multipliers[None, :]
 
@@ -107,7 +124,7 @@ class Platform:
         if self.option.endswith('CNN'):
             state2d = torch.from_numpy(pass_count).type(torch.FloatTensor)
             state = torch.from_numpy(
-                np.concatenate([veh_count, ongoing_veh_count.flatten(), price_multipliers.flatten()])).type(
+                np.concatenate([veh_count, ongoing_veh_count.flatten(), price_multipliers.flatten(), np.array([avg_profit]), zone_profits.flatten()])).type(
                 torch.FloatTensor)
             if od_permutation:
                 tmp = torch.zeros((state2d.size(0) * 2, max(self.permutation[0]) + 1, max(self.permutation[1]) + 1))
@@ -116,7 +133,7 @@ class Platform:
                 state2d = tmp
         else:
             state = torch.from_numpy(np.concatenate([pass_count.flatten(), veh_count, ongoing_veh_count.flatten(),
-                                                     price_multipliers.flatten()])).type(
+                                                     price_multipliers.flatten(), np.array([avg_profit]), zone_profits.flatten()])).type(
                 torch.FloatTensor)
             state2d = torch.zeros(1)
 
@@ -135,7 +152,12 @@ class Platform:
                 # self.prices = torch.abs(self.prices - MINP) + MINP
                 # self.prices = MAXP - torch.abs(MAXP- self.prices)
                 # self.prices = self.prices.clamp(min = MINP, max = MAXP)
-                self.prices += self.prices+torch.randn(self.prices.shape) * max(self.epsilon, self.epsilon_min)
+                if self.auto_correlation:
+                    self.noise[0:9, :] = self.noise[1:10, :].clone()
+                    self.noise[-1, :] = torch.randn(self.prices.shape) * max(self.epsilon, self.epsilon_min)/ 3.1623
+                    self.prices += torch.sum(self.noise, 0).squeeze(0)
+                else:
+                    self.prices += torch.randn(self.prices.shape) * max(self.epsilon, self.epsilon_min)
                 # self.epsilon *= self.alpha
             # epsilon-greedy
             elif self.searching == 'Greedy':
@@ -167,24 +189,28 @@ class Platform:
             # print(self.prices)
             return (MAXP**(self.prices.squeeze(0).numpy().flatten().clip(min=-1, max=1)))
 
-    def preprocess(self, pass_count, veh_count, ongoing_veh_count, price_multipliers):
+    def preprocess(self, pass_count, veh_count, ongoing_veh_count, price_multipliers, avg_price, zone_prices):
         pass_count = (pass_count - self.demand_mean[None, :, :]) / (self.demand_std + 1)[None, :, :]
         veh_count = veh_count / self.veh_num * self.num_zone
         ongoing_veh_count = ongoing_veh_count / self.veh_num * self.num_zone
         price_multipliers = price_multipliers / MAXP
-        return pass_count, veh_count, ongoing_veh_count, price_multipliers
+        avg_price = (avg_price - self.wage_mean) / self.wage_std
+        zone_prices = (zone_prices + 1e-4) / (np.sum(zone_prices + 1e-4))
+        return pass_count, veh_count, ongoing_veh_count, price_multipliers, avg_price, zone_prices
 
-    def add_memory(self, pass_count, veh_count, ongoing_veh_count,  price_multipliers, reward, t, od_permutation = True):
+    def add_memory(self, pass_count, veh_count, ongoing_veh_count, avg_profit, zone_profits, price_multipliers, reward, t, od_permutation = True):
         # normalize here
-        pass_count, veh_count, ongoing_veh_count,  price_multipliers = \
-            self.preprocess(pass_count, veh_count, ongoing_veh_count,  price_multipliers)
+        pass_count, veh_count, ongoing_veh_count, price_multipliers, avg_profit, zone_profits = \
+            self.preprocess(pass_count, veh_count, ongoing_veh_count, price_multipliers, avg_profit, zone_profits)
         if len(price_multipliers.shape) < 2:
             price_multipliers = price_multipliers[None, :]
 
         if self.option.endswith('CNN'):
             state2d = torch.from_numpy(pass_count).type(torch.FloatTensor)
             state = torch.from_numpy(
-                np.concatenate([veh_count, ongoing_veh_count.flatten(), price_multipliers.flatten()])).type(
+                np.concatenate(
+                    [veh_count, ongoing_veh_count.flatten(), price_multipliers.flatten(), np.array([avg_profit]),
+                     zone_profits.flatten()])).type(
                 torch.FloatTensor)
             if od_permutation:
                 tmp = torch.zeros((state2d.size(0) * 2, max(self.permutation[0]) + 1, max(self.permutation[1]) + 1))
@@ -193,7 +219,8 @@ class Platform:
                 state2d = tmp
         else:
             state = torch.from_numpy(np.concatenate([pass_count.flatten(), veh_count, ongoing_veh_count.flatten(),
-                                                     price_multipliers.flatten()])).type(
+                                                     price_multipliers.flatten(), np.array([avg_profit]),
+                                                     zone_profits.flatten()])).type(
                 torch.FloatTensor)
             state2d = torch.zeros(1)
 
@@ -362,6 +389,9 @@ class Memory:
 
     def clear(self):
         self.memory = deque([], maxlen=self.size)
+
+    def forget(self):
+        [self.memory.popleft() for i in range(9*len(self.memory)//10)]
 
     def __len__(self):
         return len(self.memory)

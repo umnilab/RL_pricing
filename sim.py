@@ -17,12 +17,12 @@ class Environment:
         # https://www.ridester.com/uber-rates-cost/
         self.alpha0 = 2 # base fare for passengers
         self.alpha1 = 2 # $2/ miles for passengers
-        self.alpha1_1 = 1.5 # $1.5 wage per occupied mile
-        self.alpha2 = 0.1 # $0.1/ empty mile
+        self.alpha2 = 0.1 # 0.1 # $welfare cost for empty mile, set 0 when targeting only the platform profit
 
         self.beta1 = 0.4 # 0.4/ minutes for passengers
-        self.beta1_1 = 0.3 # 0.3/ wage per occupied minute
-        self.beta2 = 0.1 # 0.1/ empty minute
+        self.beta2 = 0.1 # 0.1 # welfare cost for empty minute
+
+        self.delta = 0.75 # 3/4 passenger payments goes to drivers
 
         # data for sim
         self.pass_count = np.zeros((max_waiting, num_zone, num_zone), dtype=int)
@@ -66,9 +66,15 @@ class Environment:
         return ongoing_veh_count
 
     def step(self, new_demand, veh_schedule, price_multiplier):
+        #### at time t
         # dispatch_veh
         tot_profit = 0
-        tot_welfare = 0
+        tot_expense = np.zeros(self.num_zone)
+        tot_count = np.zeros(self.num_zone)
+        occu_mile = 0
+        occu_minute = 0
+        empty_mile = 0
+        empty_minute = 0
         served_pass = 0
 
         # time step t
@@ -92,23 +98,27 @@ class Environment:
             v.waiting = 0
             self.veh_count[v_loc] -= 1
             # price calculation function is here
-            tot_profit += self.pricing_multipliers[j, p_loc] * (self.alpha0 + self.alpha1 * self.travel_distance[p_loc, p_loc2] + \
+            tmp_payment = self.pricing_multipliers[j, p_loc] * (self.alpha0 + self.alpha1 * self.travel_distance[p_loc, p_loc2] + \
                                                      self.beta1 * self.travel_time[p_loc, p_loc2])
-            tot_welfare += - self.alpha2 * self.travel_distance[v_loc, p_loc] - self.beta2 * self.travel_time[v_loc, p_loc] - \
-                           self.pricing_multipliers[j, p_loc] * (self.alpha1_1 * self.travel_distance[p_loc, p_loc2] + \
-                                                     self.beta1_1 * self.travel_time[p_loc, p_loc2])
+            tot_profit += tmp_payment
+            # for the pickup trip, the platform pays drivers according to the empty trip wage
+            tot_expense[v.loc] += self.alpha2 * self.travel_distance[v_loc, p_loc] + self.beta2 * self.travel_time[v_loc, p_loc] + \
+                           self.delta * tmp_payment
+
+            occu_mile += self.travel_distance[p_loc, p_loc2]
+            occu_minute += self.travel_time[p_loc, p_loc2]
+            empty_mile += self.travel_distance[v_loc, p_loc]
+            empty_minute += self.travel_time[v_loc, p_loc]
+            tot_count[v.loc] += 1
         # update total and zone profit
         self.avg_profit -= self.avg_profits[0] / 30
         self.avg_profits[:-1] = self.avg_profits[1:]
-        self.avg_profits[-1] = tot_profit / (np.sum(self.veh_count) + len(veh_schedule) + 1e-4)
+        self.avg_profits[-1] = tot_profit / (np.sum(self.veh_count) + len(veh_schedule) + 1e-4) # current available vehicles
         self.avg_profit += self.avg_profits[-1] / 30
         self.zone_profit -= self.zone_profits[0, :] / 30
         self.zone_profits[:-1, :] = self.zone_profits[1:, :]
-        self.zone_profits[-1, :] = self.pricing_multipliers[0, :] * np.sum(self.pass_count, axis=(0, 2))
+        self.zone_profits[-1, :] = tot_expense / (self.veh_count + tot_count + 1e-4) # wage per avail vehicle in the corresponding zone
         self.zone_profit += self.zone_profits[-1, :] / 30
-
-        # update total_welfare, time t + 1
-        tot_welfare += - self.beta2 * np.sum(self.veh_count)
 
         # generate reposition destination
         repos_dests = [[] for i in range(self.num_zone)]
@@ -116,8 +126,19 @@ class Environment:
             if self.veh_count[i] > 0:
                 reposition_probability = ((self.zone_profit + 1e-4) / (self.travel_distance[i, :] + 1e-4)).clip(min=1e-6)
                 reposition_probability[i] = 0
+                # print(reposition_probability)
                 repos_dests[i] = list(np.random.choice(range(self.num_zone), p = reposition_probability/np.sum(reposition_probability) , size=self.veh_count[i]))
 
+        # vehicle cruising within its original zone
+        tot_expense = np.sum(tot_expense)
+        tot_expense += self.beta2 * np.sum(self.veh_count)
+        empty_minute += np.sum(self.veh_count)
+
+        # update price_multiplier
+        self.pricing_multipliers[1:self.max_waiting, :] = self.pricing_multipliers[0:(self.max_waiting - 1), :]
+        self.pricing_multipliers[0, :] = price_multiplier
+
+        #### between time t and t+1
         # update_veh
         for v in self.veh_list:
             ## vehicle movement
@@ -141,13 +162,14 @@ class Environment:
                     if len(self.rand_double) == 0:
                         self.rand_double = list(np.random.random(size=10000))
                     if v.loc != new_loc:
-                        tot_welfare += - self.alpha2 * self.travel_distance[v.loc, new_loc] - self.beta2 * self.travel_time[v.loc, new_loc]
+                        tot_expense += self.alpha2 * self.travel_distance[v.loc, new_loc] + self.beta2 * self.travel_time[v.loc, new_loc]
+                        empty_mile += self.travel_distance[v.loc, new_loc]
+                        empty_minute += self.travel_time[v.loc, new_loc]
                         self.veh_count[v.loc] -= 1
                         self.veh_queue[v.loc].remove(v)
                         v.state = 1
                         v.loc = new_loc
                         v.remaining_time = remaining_time
-            # between this step and next step
             elif v.state == 2:
                 if v.profile <= self.avg_profit:
                     v.state = 0
@@ -159,16 +181,12 @@ class Environment:
                     self.veh_queue[v.loc].append(v)
                     self.active_veh += 1
 
-        # update price_multiplier
-        self.pricing_multipliers[1:self.max_waiting, :] = self.pricing_multipliers[0:(self.max_waiting-1),:]
-        self.pricing_multipliers[0, :] = price_multiplier
-
         # generate_pass
         left_pass = np.sum(self.pass_count[-1, :])
         self.pass_count[1:, :] = self.pass_count[0:-1, :]
         self.pass_count[0, :] = new_demand
 
-        return tot_profit, tot_welfare, served_pass, left_pass
+        return tot_profit, tot_expense, served_pass, left_pass, occu_mile, occu_minute, empty_mile, empty_minute
 
     def reset(self):
         self.pass_count *= 0
