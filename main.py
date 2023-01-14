@@ -14,9 +14,8 @@ from runner import train, test
 # usage example
 # python main.py -d grid_small_dynamic/3/0/ --pricing_alg TD3_MLP -alr 0.00001 -clr 0.001 --n_epochs 50 -m all -n 0 --batch_size 32 --seed 5 -sa Gaussian -pd 0 -pe 0 -ac
 # TODO:
-# Check the policy
-# Implement PPO
-
+# Improve the speed
+# Run the grid search
 
 def get_arguments(argv):
     parser = argparse.ArgumentParser(description='SpatioTemporal Pricing')
@@ -43,23 +42,23 @@ def get_arguments(argv):
     parser.add_argument('-re', '--resume', type=int, default=0,
                         help='resume_prev_training')
     # Hyper parameters for RL algorithms
-    parser.add_argument('-b', '--batch_size', type=int, default=64,
+    parser.add_argument('-b', '--batch_size', type=int, default=32,
                         help='batch_size. (DEFAULT: 32)')
     parser.add_argument('-k', '--kernel_size', type=int, default=3,
                         help='kernel size of CNN layer')
-    parser.add_argument('-s', '--stride', type=int, default=1,
+    parser.add_argument('-s', '--stride', type=int, default=2,
                         help='stride of CNN layer')
     parser.add_argument('-o', '--od_permutation', action='store_false', default=True,
                         help='enable the permutation of OD features')
     parser.add_argument('-alr', '--actor_lr', type=float, default=0.00001, help='learning rate of actor')
     parser.add_argument('-clr', '--critic_lr', type=float, default=0.001, help='learning rate of critic')
-    parser.add_argument('-u', '--update_frequency', type=int, default=10,
-                        help='training_frequency') # train the network every 10 updates
+    parser.add_argument('-u', '--update_frequency', type=int, default=25,
+                        help='base frequency for policy update') 
     parser.add_argument('-ps', '--pooling', type=int, default=2, help='kernel/stride size of pooling layer for downsampling')
     parser.add_argument('-sa', '--searching', type=str, default='Gaussian', help='searching mechanism')
     parser.add_argument('-pd', '--policy_delay', type = int, default = 0,
                         help='incremental policy delay') # -1: n; 0: n/ln(n); other values: constant
-    parser.add_argument('-pe', '--position_encode', type=int, default= 32,\
+    parser.add_argument('-pe', '--position_encode', type=int, default= 64,\
                         help='whether to use NN for positional encoding')
     parser.add_argument('-ac', '--auto_correlation', action='store_true', default=False,
                         help='whether to use auto-correlated noise for exploration')
@@ -90,7 +89,7 @@ if __name__ == '__main__':
     scenario_tag = args.data_folder.replace("/", "_")
     settings_tag = args.pricing_alg + permutation_tag + constraint_tag + auto_tag + forget_tag + "_" +args.searching + "_" +\
                    str(args.policy_delay) +"_"+str(args.position_encode) + "_" + args.name
-    hyperp_tag = str(args.batch_size) + "_" + str(args.actor_lr) + "_" + str(args.critic_lr)
+    hyperp_tag = str(args.batch_size) + "_" + str(args.actor_lr) + "_" + str(args.critic_lr) + "_" + str(args.kernel_size)
 
     # prepare the folders for storing the results
     store_run_folder = "runs/" + scenario_tag
@@ -116,7 +115,16 @@ if __name__ == '__main__':
     args.store_model_folder = store_model_folder
     args.store_res_folder = store_res_folder
 
-    if os.path.exists(args.store_res_folder+"/"+"test_log_0.csv") or os.path.exists(args.store_res_folder+"/"+"test_log_1.csv"):
+    if args.mode == 'all' and (os.path.exists(args.store_res_folder+"/"+"train_log_"+str(args.n_epochs)+".csv") or \
+                               os.path.exists(args.store_res_folder+"/"+"test_log_1.csv")):
+        print("Files are already there, exit!")
+        sys.exit()
+
+    if (args.mode == 'test') and (len(os.listdir(args.store_model_folder)) == 0) and (args.pricing_alg not in ['dummy','equilibrium']):
+        print("No trained model can be found, exit!")
+        sys.exit()
+
+    if (args.mode == 'test') and os.path.exists(args.store_res_folder+"/"+"test_log_1.csv"):
         print("Files are already there, exit!")
         sys.exit()
 
@@ -154,7 +162,8 @@ if __name__ == '__main__':
                               searching=args.searching,
                               position_encode=args.position_encode,
                               auto_correlation=args.auto_correlation,
-                              forget=args.forget
+                              forget=args.forget,
+                              T_train = T_train
                               )
     elif args.pricing_alg == 'PPO_MLP':
         controller = Platform(td, tt, args.num_zone, actor_lr=args.actor_lr, critic_lr=args.critic_lr, option='PPO_MLP',
@@ -165,7 +174,8 @@ if __name__ == '__main__':
                               searching=args.searching,
                               position_encode=args.position_encode,
                               auto_correlation=args.auto_correlation,
-                              forget=args.forget
+                              forget=args.forget,
+                              T_train = T_train
                               )
     elif args.pricing_alg == 'TD3_CNN':
         controller = Platform(td, tt, args.num_zone, actor_lr=args.actor_lr, critic_lr=args.critic_lr, option='TD3_CNN',
@@ -177,7 +187,8 @@ if __name__ == '__main__':
                               searching = args.searching, policy_delay = args.policy_delay,
                               position_encode=args.position_encode,
                               auto_correlation=args.auto_correlation,
-                              forget=args.forget
+                              forget=args.forget,
+                              T_train = T_train
                               )
     else:
         controller = Platform(td, tt, args.num_zone, actor_lr=args.actor_lr, critic_lr=args.critic_lr, device=args.device,
@@ -187,7 +198,8 @@ if __name__ == '__main__':
                               searching = args.searching, policy_delay = args.policy_delay,
                               position_encode=args.position_encode,
                               auto_correlation=args.auto_correlation,
-                              forget=args.forget
+                              forget=args.forget,
+                              T_train = T_train
                               )
 
     env = Environment(td, tt, vp, args.num_zone, frequency=args.frequency)
@@ -198,27 +210,34 @@ if __name__ == '__main__':
         if args.resume > 0:
             if args.verbose:
                 print("Load model")
+            print("Resume training from epoch " + str(args.resume))
             controller.pricer.load_weights(
                 args.store_model_folder + "/", args.resume)
+            controller.buffer.load(args.store_model_folder + "/", args.resume)
             if args.device == 'cuda':
                 controller.pricer.cuda()
+
+            # update the searching variance
+            for i in range(args.resume):
+                controller.decay_searching_variance()
+
         baseline = (1 - env.delta) * (env.alpha0 * np.sum(dd_train, axis=(1, 2)) + env.alpha1 * np.sum(
             dd_train * td[None, :, :], axis=(1, 2)) + \
                    env.beta1 * np.sum(dd_train * tt[None, :, :], axis=(1, 2)))
         train(env, controller, dd_train, T_train, baseline, writer, args)
-        test(env, controller, dd_train, dd_test, T_test, args, 0)
+        # test(env, controller, dd_train, dd_test, T_test, args, 0)
     else:
         # load the model
         if args.verbose:
             print("Load model")
         if args.pricing_alg.startswith('TD3'):
             controller.pricer.load_weights(
-                args.store_model_folder + "/", args.n_epoch)
+                args.store_model_folder + "/", args.n_epochs)
             if args.device == 'cuda':
                 controller.pricer.cuda()
         if args.pricing_alg.startswith('PPO'):
             controller.pricer.load_weights(
-                args.store_model_folder + "/", args.n_epoch)
+                args.store_model_folder + "/", args.n_epochs)
             controller.pricer.set_action_std(controller.min_action_std)
             if args.device == 'cuda':
                 controller.pricer.cuda()

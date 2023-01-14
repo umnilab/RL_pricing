@@ -4,8 +4,7 @@ import math
 from typing import List, cast
 from torch.autograd import Variable
 
-PADDING = 0
-
+PADDING = 2
 
 def print_summary(model):
     tot = 0

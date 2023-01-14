@@ -16,10 +16,10 @@ class Environment:
         # https://www.engadget.com/nyc-gig-drivers-pay-increase-012304976.html
         # https://www.ridester.com/uber-rates-cost/
         self.alpha0 = 2 # base fare for passengers
-        self.alpha1 = 2 # $2/ miles for passengers
+        self.alpha1 = 2 # payments $2/ miles from passengers
         self.alpha2 = 0.1 # 0.1 # $welfare cost for empty mile, set 0 when targeting only the platform profit
 
-        self.beta1 = 0.4 # 0.4/ minutes for passengers
+        self.beta1 = 0.4 # payment $0.4/ minutes from passengers
         self.beta2 = 0.1 # 0.1 # welfare cost for empty minute
 
         self.delta = 0.75 # 3/4 passenger payments goes to drivers
@@ -38,8 +38,8 @@ class Environment:
         # initialization
         self.initialize_veh()
 
-        self.rand_int = list(np.random.randint(0,self.num_zone,size=10000))
-        self.rand_double = list(np.random.random(size=10000))
+        self.rand_int = list(np.random.randint(0,self.num_zone,size=100000))
+        self.rand_double = list(np.random.random(size=100000))
 
     def initialize_veh(self):
         veh_locs = np.array([i for i in range(self.num_zone)] * (len(self.veh_profiles) // self.num_zone) + [i for i in
@@ -120,14 +120,16 @@ class Environment:
         self.zone_profits[-1, :] = tot_expense / (self.veh_count + tot_count + 1e-4) # wage per avail vehicle in the corresponding zone
         self.zone_profit += self.zone_profits[-1, :] / 30
 
-        # generate reposition destination
-        repos_dests = [[] for i in range(self.num_zone)]
+        # generate reposition destination, implement using a uniform double
+        reposition_probabilities = [[] for i in range(self.num_zone)]
         for i in range(self.num_zone):
             if self.veh_count[i] > 0:
-                reposition_probability = ((self.zone_profit + 1e-4) / (self.travel_distance[i, :] + 1e-4)).clip(min=1e-6)
-                reposition_probability[i] = 0
+                reposition_probabilities[i] = (self.zone_profit + 1e-4) / (self.travel_distance[i, :] + 1e-4)
+                reposition_probabilities[i][i] = 0
+                reposition_probabilities[i] /= np.sum(reposition_probabilities[i])
+                reposition_probabilities[i] = np.cumsum(reposition_probabilities[i])
                 # print(reposition_probability)
-                repos_dests[i] = list(np.random.choice(range(self.num_zone), p = reposition_probability/np.sum(reposition_probability) , size=self.veh_count[i]))
+                # repos_dests[i] = list(np.random.choice(range(self.num_zone), p = reposition_probability/np.sum(reposition_probability) , size=self.veh_count[i]))
 
         # vehicle cruising within its original zone
         tot_expense = np.sum(tot_expense)
@@ -149,7 +151,6 @@ class Environment:
                     v.state = 0
                     self.veh_count[v.loc] += 1
                     self.veh_queue[v.loc].append(v)
-
             ## vehicles quit/reposition/rejoin
             elif v.state == 0:
                 if v.profile > self.avg_profit:
@@ -158,9 +159,10 @@ class Environment:
                     self.veh_queue[v.loc].remove(v)
                     self.active_veh -= 1
                 else:
-                    new_loc, remaining_time = v.reposition(self.travel_time, self.rand_double.pop(), repos_dests[v.loc].pop())
                     if len(self.rand_double) == 0:
-                        self.rand_double = list(np.random.random(size=10000))
+                        self.rand_double = list(np.random.random(size=100000))
+                    new_loc, remaining_time = v.reposition(self.travel_time, self.rand_double.pop(),\
+                                                           (self.rand_double.pop() < reposition_probabilities[v.loc]).argmax())
                     if v.loc != new_loc:
                         tot_expense += self.alpha2 * self.travel_distance[v.loc, new_loc] + self.beta2 * self.travel_time[v.loc, new_loc]
                         empty_mile += self.travel_distance[v.loc, new_loc]
@@ -176,7 +178,7 @@ class Environment:
                     v.waiting = 0
                     v.loc = self.rand_int.pop()
                     if len(self.rand_int) == 0:
-                        self.rand_int = list(np.random.randint(0, self.num_zone, size = 10000))
+                        self.rand_int = list(np.random.randint(0, self.num_zone, size = 100000))
                     self.veh_count[v.loc] += 1
                     self.veh_queue[v.loc].append(v)
                     self.active_veh += 1

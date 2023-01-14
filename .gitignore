@@ -1,0 +1,5 @@
+model
+result
+run
+*.pyc
+*.pyc

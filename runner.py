@@ -23,26 +23,32 @@ def train(env, controller, dd_train, T_train, baseline, writer, args):
     res = []  # pd.DataFrame(columns = 'epoch', 't', 'policy', 'profit', 'welfare')
 
     # one day to warm up to obtain the initial active vehicle distribution
-    for t in range(6 * 1440, T_train):
+    for t in range(max(T_train-1440, 0), T_train):
+        # print(t)
         temp_cost, temp_schedule = controller.batch_matching(np.sum(env.pass_count, axis=(0, 2)),
                                                              env.veh_count)
         ongoing_veh = env.get_ongoing_veh()
-        if args.pricing_alg == 'dummy':
-            # no need to train
-            ...
-        elif args.pricing_alg == 'equilibrium':
-            ...
-        else:
-            temp_p = controller.update_price(env.pass_count, env.veh_count, \
-                                         ongoing_veh, env.avg_profit, env.zone_profit,
-                                         env.pricing_multipliers[0:max(5 // args.frequency, 1), :],
-                                         t, 'train',
-                                         od_permutation=args.od_permutation,
-                                         policy_constr=args.policy_constr,
-                                         last_pricing=env.pricing_multipliers[0, :])
-        dd_train_ = np.random.poisson(dd_train[t, :, :]).astype(int)
-        temp_demand = dd_train_
-        # temp_demand += np.random.binomial(1, (dd_train_/ temp_p[:, None] - temp_demand))
+        if t % args.frequency == 0:
+            if args.pricing_alg == 'dummy':
+                # no need to train
+                ...
+            elif args.pricing_alg == 'equilibrium':
+                ...
+            else:
+                temp_p = controller.update_price(env.pass_count, env.veh_count, \
+                                             ongoing_veh, env.avg_profit, env.zone_profit,
+                                             env.pricing_multipliers[0:max(5 // args.frequency, 1), :],
+                                             t, 'train',
+                                             od_permutation=args.od_permutation,
+                                             policy_constr=args.policy_constr,
+                                             last_pricing=env.pricing_multipliers[0, :])
+            dd_train_ = np.zeros(dd_train[t:(t + args.frequency), :, :].shape)
+            ind = dd_train[t:(t + args.frequency), :, :] > 0
+            dd_train_[ind] = np.random.poisson(dd_train[t:(t + args.frequency), :, :][ind])
+            temp_demands = np.floor(dd_train_ * price_sensitivity(temp_p[None, :, None], args.pricing_mode))
+            temp_demands += np.random.binomial(1, (
+                        dd_train_ * price_sensitivity(temp_p[None, :, None], args.pricing_mode) - temp_demands))
+        temp_demand = temp_demands[t % args.frequency]
         env.step(temp_demand, temp_schedule, temp_p)
 
     for e in range(args.resume):
@@ -89,13 +95,12 @@ def train(env, controller, dd_train, T_train, baseline, writer, args):
                                                          policy_constr=args.policy_constr,
                                                          last_pricing=env.pricing_multipliers[0, :])
 
-                    dd_train_ = np.random.poisson(dd_train[t:(t + args.frequency), :, :]).astype(int)
+                    dd_train_ = np.zeros(dd_train[t:(t + args.frequency), :, :].shape)
+                    ind = dd_train[t:(t + args.frequency), :, :] > 0
+                    dd_train_[ind] = np.random.poisson(dd_train[t:(t + args.frequency), :, :][ind])
                     temp_demands = np.floor(dd_train_ * price_sensitivity(temp_p[None, :, None], args.pricing_mode))
-                    # print(temp_p)
-                    # print(dd_train_)
-                    # print(price_sensitivity(temp_p[None, :, None]))
-                    # print(dd_train_ * price_sensitivity(temp_p[None, :, None]))
-                    temp_demands += np.random.binomial(1, (dd_train_ * price_sensitivity(temp_p[None, :, None], args.pricing_mode) - temp_demands))
+                    temp_demands += np.random.binomial(1, (
+                            dd_train_ * price_sensitivity(temp_p[None, :, None], args.pricing_mode) - temp_demands))
                     temp_reward = 0  # refresh the temp_reward
 
                 temp_demand = temp_demands[t % args.frequency]
@@ -104,12 +109,12 @@ def train(env, controller, dd_train, T_train, baseline, writer, args):
             # train the model
             # if t == 0 and e == 1:
             #     controller.train_pricing_value(1000, args.batch_size)
-            if args.pricing_alg.startswith('TD3') and ((e * T_train + t + 1)//args.frequency) % args.update_frequency == 0:
-                controller.train_pricing_policy(((e - 1) * T_train + t + 1) //args.frequency // args.update_frequency, \
-                                                10080 // args.frequency, args.batch_size)
-            elif args.pricing_alg.startswith('PPO') and ((e * T_train + t + 1)//args.frequency) % args.update_frequency == 0:
+            if args.pricing_alg.startswith('TD3') and (e * T_train + t + 1) % (args.frequency) == 0: 
+                controller.train_pricing_policy(((e - 1) * T_train + t + 1) //args.frequency, \
+                                                T_train // args.frequency, args.batch_size, args.update_frequency)
+            elif args.pricing_alg.startswith('PPO') and (e * T_train + t + 1) % (args.frequency * args.update_frequency) == 0:
                 controller.train_pricing_policy(50, \
-                                                args.update_frequency, args.batch_size) # 100 epoches
+                                                args.update_frequency, args.batch_size)
             total_time_step += 1
             total_profit += temp_profit
             total_reposition += temp_cost
@@ -146,14 +151,15 @@ def train(env, controller, dd_train, T_train, baseline, writer, args):
         writer.add_scalar("Served_passenger/train", total_served_pass, e)
         writer.add_scalar("Left_passenger/train", total_left_pass, e)
 
-        if ((e + 1) % 10 == 0):
-            controller.pricer.save_model(
-                args.store_model_folder + "/", e)
-
     res = pd.DataFrame(res, columns=['epoch', 'income', 'expense', 'served', 'left', 'occu_mile', 'occu_minute', 'empty_mile', 'empty_minute'])
     res.to_csv(
-        args.store_res_folder+"/"+"train_log.csv",
+        args.store_res_folder+"/"+"train_log_"+str(args.n_epochs)+".csv",
         index=None)
+
+    # save the model in the end
+    controller.pricer.save_model(
+        args.store_model_folder + "/", args.n_epochs)
+    controller.buffer.save(args.store_model_folder + "/", args.n_epochs)
 
     # store the model
     # print("Store model")
@@ -181,59 +187,58 @@ def test(env, controller, dd_train, dd_test, T_test, args, k):
     total_left_pass = 0
     temp_demands = np.zeros((args.frequency, args.num_zone))
 
-    for t in range(6 * 1440, T_test):
+    for t in range(max(T_test-1440, 0), T_test):
+        print(t)
         temp_cost, temp_schedule = controller.batch_matching(np.sum(env.pass_count, axis=(0, 2)),
                                                              env.veh_count)
         # temp_p = controller.dummy_price()
-        if args.pricing_alg == 'dummy':
-            temp_p = controller.dummy_price()
-        elif args.pricing_alg == 'equilibrium':
-            temp_p = controller.equilibrium_price(np.sum(env.pass_count, axis=(0, 2)) - env.veh_count + \
-                                                  np.sum(
-                                                      [dd_train[(t + i) % T_test, :, :] for i in range(10)],
-                                                      axis=(0, 2)) -
-                                                  np.sum(
-                                                      [dd_train[(t + i) % T_test, :, :] for i in range(10)],
-                                                      axis=(0, 1)),
-                                                  last_pricing=env.pricing_multipliers[0, :],
-                                                  policy_constr=args.policy_constr,
-                                                  )
-        else:
-            temp_p = controller.update_price(env.pass_count, env.veh_count,
-                                             env.get_ongoing_veh(), env.avg_profit, env.zone_profit,
-                                             env.pricing_multipliers[0:max(5 // args.frequency, 1), :],
-                                             t, 'test', od_permutation=args.od_permutation,
-                                             last_pricing=env.pricing_multipliers[0, :],
-                                             policy_constr=args.policy_constr)
+        if t % args.frequency == 0:
+            if args.pricing_alg == 'dummy':
+                # no need to train
+                temp_p = controller.dummy_price()
+            elif args.pricing_alg == 'equilibrium':
+                temp_p = controller.equilibrium_price(np.sum(env.pass_count, axis=(0)), env.active_veh ,
+                                                          [dd_train[(t + i) % T_test, :, :] for i in range(10)], args.data_folder)
+            else:
+                ongoing_veh = env.get_ongoing_veh()
+                temp_p = controller.update_price(env.pass_count, env.veh_count, \
+                                                 ongoing_veh, env.avg_profit, env.zone_profit,
+                                                 env.pricing_multipliers[0:max(5 // args.frequency, 1), :],
+                                                 t, 'train',
+                                                 od_permutation=args.od_permutation,
+                                                 policy_constr=args.policy_constr,
+                                                 last_pricing=env.pricing_multipliers[0, :])
+            dd_train_ = np.zeros(dd_train[t:(t + args.frequency), :, :].shape)
+            ind = dd_train[t:(t + args.frequency), :, :] > 0
+            dd_train_[ind] = np.random.poisson(dd_train[t:(t + args.frequency), :, :][ind])
+            temp_demands = np.floor(dd_train_ * price_sensitivity(temp_p[None, :, None], args.pricing_mode))
+            temp_demands += np.random.binomial(1, (
+                    dd_train_ * price_sensitivity(temp_p[None, :, None], args.pricing_mode) - temp_demands))
+        temp_demand = temp_demands[t % args.frequency]
         dd_train_ = np.random.poisson(dd_train[t, :, :]).astype(int)
         temp_demand = dd_train_
         # temp_demand += np.random.binomial(1, (dd_train_ / temp_p[:, None] - temp_demand))
         env.step(temp_demand, temp_schedule, temp_p)
 
     for t in range(T_test):
+        print(t)
         temp_cost, temp_schedule = controller.batch_matching(np.sum(env.pass_count, axis=(0, 2)),
                                                              env.veh_count)
         if t % args.frequency == 0:
             if args.pricing_alg == 'dummy':
                 temp_p = controller.dummy_price()
             elif args.pricing_alg == 'equilibrium':
-                temp_p = controller.equilibrium_price(np.sum(env.pass_count, axis=(0, 2)) - env.veh_count + \
-                                                      np.sum(
-                                                          [dd_train[(t + i) % T_test, :, :] for i in range(10)],
-                                                          axis=(0, 2)) -
-                                                      np.sum(
-                                                          [dd_train[(t + i) % T_test, :, :] for i in range(10)],
-                                                          axis=(0, 1)),
-                                                      last_pricing=env.pricing_multipliers[0, :],
-                                                      policy_constr=args.policy_constr,
-                                                      )
+                temp_p = controller.equilibrium_price(np.sum(env.pass_count, axis=(0)),env.active_veh ,
+                                                          [dd_train[(t + i) % T_test, :, :] for i in range(10)], args.data_folder)
             else:
-                temp_p = controller.update_price(env.pass_count, env.veh_count,
-                                                 env.get_ongoing_veh(), env.avg_profit, env.zone_profit,
-                                                 env.pricing_multipliers[0:max(5 // args.frequency, 1), :],
-                                                 t, 'test', od_permutation=args.od_permutation,
-                                                 last_pricing=env.pricing_multipliers[0, :],
-                                                 policy_constr=args.policy_constr)
+                ongoing_veh = env.get_ongoing_veh()
+                temp_p = controller.update_price(env.pass_count, env.veh_count, \
+                                                         ongoing_veh, env.avg_profit, env.zone_profit,
+                                                         env.pricing_multipliers[0:max(5 // args.frequency, 1), :],
+                                                         t, 'test',
+                                                         od_permutation=args.od_permutation,
+                                                         policy_constr=args.policy_constr,
+                                                         last_pricing=env.pricing_multipliers[0, :])
             temp_demands = np.floor(dd_test[t:(t + args.frequency), :, :] * price_sensitivity(temp_p[None, :, None], args.pricing_mode))
             temp_demands += np.random.binomial(1, (
                     dd_test[t:(t + args.frequency), :, :] * price_sensitivity(temp_p[None, :, None], args.pricing_mode) - temp_demands))
