@@ -6,3 +6,5 @@ To run the expriment, call
 
 After models are trained, call 
 "bash test.sh [small/large] [full/ablation]"
+
+The inputs of NYC scenario can be found in https://drive.google.com/drive/folders/1IVQUZXHgDQMe1IrVX2A60bidymF0Ccbq?usp=share_link.
