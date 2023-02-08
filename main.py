@@ -13,9 +13,6 @@ from runner import train, test
 
 # usage example
 # python main.py -d grid_small_dynamic/3/0/ --pricing_alg TD3_MLP -alr 0.00001 -clr 0.001 --n_epochs 50 -m all -n 0 --batch_size 32 --seed 5 -sa Gaussian -pd 0 -pe 0 -ac
-# TODO:
-# Improve the speed
-# Run the grid search
 
 def get_arguments(argv):
     parser = argparse.ArgumentParser(description='SpatioTemporal Pricing')
