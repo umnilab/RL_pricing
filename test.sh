@@ -8,6 +8,9 @@ pricing_alg1="TD3_MLP"
 pricing_alg2="TD3_CNN"
 pricing_alg3="PPO_MLP"
 pricing_alg4="PPO_CNN"
+pricing_alg5="SAC_MLP"
+pricing_alg6="SAC_CNN"
+
 
 #
 small_case="grid_small_dynamic/" #("grid_small_static/" "grid_small_dynamic/")
@@ -56,11 +59,15 @@ if [ ${small_exp} -gt 0 ]; then
                                  --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -pd 0 -fg
                             python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg3} -alr ${actor_lr} -clr ${critic_lr}\
                                 --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 2000
+                            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg5} -alr ${actor_lr} -clr ${critic_lr}\
+                                 --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50
                             for filter_size in 3 4; do
                                 python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg2} -alr ${actor_lr} -clr ${critic_lr}\
                                     --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -pd 0 -k ${filter_size} -fg
                                 python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg4} -alr ${actor_lr} -clr ${critic_lr}\
                                 --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -k ${small_size} -u 2000
+                                python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg6} -alr ${actor_lr} -clr ${critic_lr}\
+                                    --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -k ${filter_size}
                             done
                         fi
                     done
@@ -85,12 +92,16 @@ if [ ${small_exp} -gt 0 ]; then
                             python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg1} -alr ${actor_lr} -clr ${critic_lr}\
                                 --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -pd 0 -fg
                             python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg3} -alr ${actor_lr} -clr ${critic_lr}\
-                                    --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 2000
+                                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 2000
+                            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg5} -alr ${actor_lr} -clr ${critic_lr}\
+                                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50
                             for filter_size in 3 4; do
                                 python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg2} -alr ${actor_lr} -clr ${critic_lr}\
                                 --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -pd 0 -k ${filter_size} -fg
                                 python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg4} -alr ${actor_lr} -clr ${critic_lr}\
-                                    --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -k ${filter_size} -u 2000
+                                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -k ${filter_size} -u 2000
+                                python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg6} -alr ${actor_lr} -clr ${critic_lr}\
+                                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -k ${filter_size}
                             done
                         fi
                     done
@@ -106,7 +117,15 @@ if [ ${small_exp} -gt 0 ]; then
     if [ ${ablation_exp} -gt 0 ]; then
         small_case="grid_small_static/"
         small_size=3
-        for name in 4; do
+        for name in 4; 
+            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg3} -alr 0.0005 -clr 0.001\
+                    --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 2000 -fg
+            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg5} -alr 0.0001 -clr 0.001\
+                     --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -fg
+            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg4} -alr 0.0005 -clr 0.001\
+                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -k 4 -u 2000 -fg
+            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg6} -alr 0.0001 -clr 0.001\
+                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -k 3 -fg
             for pd in 0; do
                 # without forget mechanism
                 python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg1} -alr ${actor_lr} -clr 0.001\
@@ -131,6 +150,14 @@ if [ ${small_exp} -gt 0 ]; then
         small_case="grid_small_dynamic/"
         small_size=4
         for name in 4; do
+            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg3} -alr 0.0005 -clr 0.005\
+                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 2000 -fg
+            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg5} -alr 0.0001 -clr 0.001\ 
+                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -fg
+            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg4} -alr 0.001 -clr 0.005\
+                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -k 3 -u 2000 -fg
+            python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg6} -alr 0.0001 -clr 0.001\
+                --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -k 3 -fg
             for pd in 0; do
                 python main.py --data_folder ${small_case}${small_size}/${name}/ --pricing_alg ${pricing_alg1} -alr ${actor_lr} -clr 0.005\
                         --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -pd ${pd}
@@ -165,12 +192,15 @@ if [ ${large_exp} -gt 0 ]; then
                             --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -pd 0 -f 10 -fg
                         python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg3} -alr ${actor_lr} -clr ${critic_lr}\
                                 --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -f 10 -u 2000
+                        python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg5} -alr ${actor_lr} -clr ${critic_lr}\
+                            --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -f 10
                         for filter_size in 5; do
                             python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg2} -alr ${actor_lr} -clr ${critic_lr}\
                             --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -pd 0 -k ${filter_size} -f 10 -fg
                             python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg4} -alr ${actor_lr} -clr ${critic_lr}\
                                 --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -k ${filter_size} -f 10 -u 2000
-                        
+                            python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg6} -alr ${actor_lr} -clr ${critic_lr}\
+                            --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -k ${filter_size} -f 10 -fg
                         done
                     done
                 done
@@ -185,6 +215,15 @@ if [ ${large_exp} -gt 0 ]; then
         large_size=5
         for name in 4; do
             for batch_size in 64; do
+                python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg3} -alr 0.0001 -clr 0.01\
+                    --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -f 10 -u 2000 -fg
+                python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg5} -alr 0.0001 -clr 0.001\
+                    --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -f 10 -fg
+                python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg4} -alr 0.00001 -clr 0.005\
+                    --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -k 5 -f 10 -u 2000 -fg
+                python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg6} -alr 0.001 -clr 0.005\
+                    --device ${device} --n_epochs ${EPOCHS} -m test -n ${name} --batch_size ${batch_size} --seed ${SEEDS[${name}]} -u 50 -k 5 -f 10 -fg
+                
                 # no forget
                 for pd in 0; do
                     python main.py --data_folder ${large_case} --pricing_alg ${pricing_alg1} -alr ${actor_lr} -clr ${critic_lr}\

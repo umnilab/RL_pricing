@@ -115,6 +115,10 @@ def train(env, controller, dd_train, T_train, baseline, writer, args):
             elif args.pricing_alg.startswith('PPO') and (e * T_train + t + 1) % (args.frequency * args.update_frequency) == 0:
                 controller.train_pricing_policy(50, \
                                                 args.update_frequency, args.batch_size)
+            elif args.pricing_alg.startswith('SAC') and (e * T_train + t + 1) % (args.frequency * args.update_frequency) == 0:
+                controller.train_pricing_policy(((e - 1) * T_train + t + 1) //(args.frequency * args.update_frequency), \
+                                                args.update_frequency, args.batch_size)
+
             total_time_step += 1
             total_profit += temp_profit
             total_reposition += temp_cost

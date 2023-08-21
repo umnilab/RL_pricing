@@ -13,6 +13,8 @@ from runner import train, test
 
 # usage example
 # python main.py -d grid_small_dynamic/3/0/ --pricing_alg TD3_MLP -alr 0.00001 -clr 0.001 --n_epochs 50 -m all -n 0 --batch_size 32 --seed 5 -sa Gaussian -pd 0 -pe 0 -ac
+# TODO:
+# Add another algorithm for SAR
 
 def get_arguments(argv):
     parser = argparse.ArgumentParser(description='SpatioTemporal Pricing')
@@ -89,9 +91,12 @@ if __name__ == '__main__':
     hyperp_tag = str(args.batch_size) + "_" + str(args.actor_lr) + "_" + str(args.critic_lr) + "_" + str(args.kernel_size)
 
     # prepare the folders for storing the results
-    store_run_folder = "runs/" + scenario_tag
-    store_model_folder = 'models/' + scenario_tag + '/' + settings_tag + '/' + hyperp_tag
-    store_res_folder = "results/" + scenario_tag + '/' + settings_tag + '/' + hyperp_tag
+    store_run_folder = f"results/{scenario_tag[:-1]}/runs"
+    store_model_folder = f"results/{scenario_tag[:-1]}/models/{settings_tag}/{hyperp_tag}" 
+    if (args.mode == 'test'):
+        store_res_folder = f"results/{scenario_tag[:-1]}/tests/{settings_tag}/{hyperp_tag}"
+    else:
+        store_res_folder = f"results/{scenario_tag[:-1]}/results/{settings_tag}/{hyperp_tag}"
 
     if (not os.path.isdir(
             store_run_folder + "/")):
@@ -112,8 +117,7 @@ if __name__ == '__main__':
     args.store_model_folder = store_model_folder
     args.store_res_folder = store_res_folder
 
-    if args.mode == 'all' and (os.path.exists(args.store_res_folder+"/"+"train_log_"+str(args.n_epochs)+".csv") or \
-                               os.path.exists(args.store_res_folder+"/"+"test_log_1.csv")):
+    if args.mode == 'all' and (os.path.exists(args.store_res_folder+"/"+"train_log_"+str(args.n_epochs)+".csv")):
         print("Files are already there, exit!")
         sys.exit()
 
@@ -164,6 +168,32 @@ if __name__ == '__main__':
                               )
     elif args.pricing_alg == 'PPO_MLP':
         controller = Platform(td, tt, args.num_zone, actor_lr=args.actor_lr, critic_lr=args.critic_lr, option='PPO_MLP',
+                              device=args.device,
+                              writer=writer, update_freq=args.frequency, veh_num=len(vp),
+                              demand_mean=np.mean(dd_train, axis=0), demand_std=np.std(dd_train, axis=0),
+                              wage_mean=np.mean(vp, axis=0), wage_std=np.std(vp, axis=0),
+                              searching=args.searching,
+                              position_encode=args.position_encode,
+                              auto_correlation=args.auto_correlation,
+                              forget=args.forget,
+                              T_train = T_train
+                              )
+    elif args.pricing_alg == 'SAC_CNN':
+        controller = Platform(td, tt, args.num_zone, actor_lr=args.actor_lr, critic_lr=args.critic_lr, option='SAC_CNN',
+                              permutation=permutation, permutation2=permutation2, kernel_size=args.kernel_size,
+                              stride=args.stride, pooling=args.pooling, device=args.device, writer=writer,
+                              od_permutation=args.od_permutation, update_freq=args.frequency,
+                              veh_num=len(vp), \
+                              demand_mean=np.mean(dd_train, axis=0), demand_std=np.std(dd_train, axis=0),
+                              wage_mean=np.mean(vp, axis=0), wage_std=np.std(vp, axis = 0),
+                              searching=args.searching,
+                              position_encode=args.position_encode,
+                              auto_correlation=args.auto_correlation,
+                              forget=args.forget,
+                              T_train = T_train
+                              )
+    elif args.pricing_alg == 'SAC_MLP':
+        controller = Platform(td, tt, args.num_zone, actor_lr=args.actor_lr, critic_lr=args.critic_lr, option='SAC_MLP',
                               device=args.device,
                               writer=writer, update_freq=args.frequency, veh_num=len(vp),
                               demand_mean=np.mean(dd_train, axis=0), demand_std=np.std(dd_train, axis=0),
@@ -233,6 +263,12 @@ if __name__ == '__main__':
             if args.device == 'cuda':
                 controller.pricer.cuda()
         if args.pricing_alg.startswith('PPO'):
+            controller.pricer.load_weights(
+                args.store_model_folder + "/", args.n_epochs)
+            controller.pricer.set_action_std(controller.min_action_std)
+            if args.device == 'cuda':
+                controller.pricer.cuda()
+        if args.pricing_alg.startswith('SAC'):
             controller.pricer.load_weights(
                 args.store_model_folder + "/", args.n_epochs)
             controller.pricer.set_action_std(controller.min_action_std)
