@@ -1,5 +1,5 @@
 # RL_pricing
-This is a repository for the paper "Scalable reinforcement learning approaches for dynamic pricing in ride-hailing systems".
+This is a repository for the paper "[Scalable reinforcement learning approaches for dynamic pricing in ride-hailing systems](https://www.sciencedirect.com/science/article/abs/pii/S019126152300173X)".
 
 To run the expriment, call
 "bash train.sh [small/large] [full/ablation]"
